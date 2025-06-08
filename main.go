@@ -24,6 +24,17 @@ func main() {
     anthropicClient := anthropic.NewClient()
 
 	app.OnBeforeServe().Add(func(e *core.ServeEvent) error {
+		// Add the authentication middleware
+		e.Router.Use(func(next echo.HandlerFunc) echo.HandlerFunc {
+			return func(c echo.Context) error {
+				// Get the auth record from the request
+				authRecord, _ := c.Get("authRecord").(*models.Record)
+				if authRecord != nil {
+					c.Set("pb_user", authRecord)
+				}
+				return next(c)
+			}
+		})
 
     		// Protect the route: must be authenticated user
     		e.Router.POST("/api/ask/ai", func(c echo.Context) error {
@@ -109,9 +120,4 @@ func main() {
     	if err := app.Start(); err != nil {
     		log.Fatal(err)
     	}
-
-
-	if err := app.Start(); err != nil {
-		log.Fatal(err)
-	}
 }
