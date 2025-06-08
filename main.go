@@ -4,13 +4,31 @@ import (
     "context"
 	"log"
 	"os"
+	"sync"
+	"net/http"
 
 	"github.com/labstack/echo/v5"
 	"github.com/pocketbase/pocketbase"
 	"github.com/pocketbase/pocketbase/models"
 	"github.com/pocketbase/pocketbase/core"
+	"github.com/gorilla/websocket"
 
 	anthropic "github.com/anthropics/anthropic-sdk-go"
+)
+
+var (
+	upgrader = websocket.Upgrader{
+		ReadBufferSize:  1024,
+		WriteBufferSize: 1024,
+		// Allow all origins for development
+		CheckOrigin: func(r *http.Request) bool {
+			return true
+		},
+	}
+	// Map to store active WebSocket connections
+	clients = make(map[*websocket.Conn]bool)
+	// Mutex to protect the clients map
+	clientsMutex sync.Mutex
 )
 
 func main() {
@@ -34,6 +52,88 @@ func main() {
 				}
 				return next(c)
 			}
+		})
+
+		// WebSocket endpoint
+		e.Router.GET("/ws", func(c echo.Context) error {
+			ws, err := upgrader.Upgrade(c.Response().Writer, c.Request(), nil)
+			if err != nil {
+				log.Printf("WebSocket upgrade error: %v", err)
+				return err
+			}
+			defer ws.Close()
+
+			// Add client to the map
+			clientsMutex.Lock()
+			clients[ws] = true
+			clientsMutex.Unlock()
+
+			// Remove client when function returns
+			defer func() {
+				clientsMutex.Lock()
+				delete(clients, ws)
+				clientsMutex.Unlock()
+			}()
+
+			// Handle incoming messages
+			for {
+				_, message, err := ws.ReadMessage()
+				if err != nil {
+					log.Printf("WebSocket read error: %v", err)
+					break
+				}
+
+				// Process the message with Claude
+				ctx := context.Background()
+				messages := []anthropic.MessageParam{
+					anthropic.NewUserMessage(anthropic.NewTextBlock(string(message))),
+				}
+
+				response, err := anthropicClient.Messages.New(ctx, anthropic.MessageNewParams{
+					Model:     anthropic.ModelClaude3_7SonnetLatest,
+					MaxTokens: int64(1024),
+					Messages:  messages,
+				})
+				if err != nil {
+					log.Printf("Anthropic error: %v", err)
+					ws.WriteMessage(websocket.TextMessage, []byte("Error processing request"))
+					continue
+				}
+
+				// Aggregate AI response text
+				var aiResponse string
+				for _, content := range response.Content {
+					if content.Type == "text" {
+						aiResponse += content.Text
+					}
+				}
+
+				// Send response back to client
+				if err := ws.WriteMessage(websocket.TextMessage, []byte(aiResponse)); err != nil {
+					log.Printf("WebSocket write error: %v", err)
+					break
+				}
+
+				// Save conversation to PocketBase
+				collection, err := app.Dao().FindCollectionByNameOrId("conversations")
+				if err != nil {
+					log.Printf("Failed to find conversations collection: %v", err)
+					continue
+				}
+
+				record := models.NewRecord(collection)
+				recordData := map[string]any{
+					"userInput":  string(message),
+					"aiResponse": aiResponse,
+				}
+				record.Load(recordData)
+
+				if err := app.Dao().SaveRecord(record); err != nil {
+					log.Printf("Failed to save conversation: %v", err)
+				}
+			}
+
+			return nil
 		})
 
     		// Protect the route: must be authenticated user
