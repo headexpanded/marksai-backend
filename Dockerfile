@@ -12,9 +12,9 @@ RUN go mod download
 COPY . .
 
 # Build main.go as an executable
-RUN go build -o yace-server .
+RUN go build -o marksai-server .
 
 # Expose PocketBase default port
 EXPOSE 8090
 
-CMD ["./yace-server", "serve", "--http=0.0.0.0:8090", "--dir", "/pb_data"]
+CMD ["./marksai-server", "serve", "--http=0.0.0.0:8090", "--dir", "/pb_data"]
