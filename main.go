@@ -10,6 +10,7 @@ import (
 	"github.com/labstack/echo/v5"
 	"github.com/pocketbase/pocketbase"
 	"github.com/pocketbase/pocketbase/models"
+	"github.com/pocketbase/pocketbase/models/schema"
 	"github.com/pocketbase/pocketbase/core"
 	"github.com/gorilla/websocket"
 
@@ -31,6 +32,50 @@ var (
 	clientsMutex sync.Mutex
 )
 
+func strPtr(s string) *string {
+	return &s
+}
+
+func ensureConversationsCollection(app *pocketbase.PocketBase) error {
+    const collectionName = "conversations"
+
+    // Check if collection already exists
+    existing, err := app.Dao().FindCollectionByNameOrId(collectionName)
+    if err == nil && existing != nil {
+        return nil // Already exists
+    }
+
+    conversations := &models.Collection{
+        Name:       collectionName,
+        Type:       models.CollectionTypeBase,
+        ListRule:   strPtr("user = @request.auth.id"),
+        ViewRule:   strPtr("user = @request.auth.id"),
+        CreateRule: strPtr("user = @request.auth.id"),
+        UpdateRule: strPtr("user = @request.auth.id"),
+        DeleteRule: strPtr("user = @request.auth.id"),
+        Schema: schema.NewSchema(
+            &schema.SchemaField{
+                Name:     "user",
+                Type:     schema.FieldTypeRelation,
+                Required: true,
+                Options:  &schema.RelationOptions{CollectionId: "_pb_users_auth_"},
+            },
+            &schema.SchemaField{
+                Name:     "userInput",
+                Type:     schema.FieldTypeText,
+                Required: true,
+            },
+            &schema.SchemaField{
+                Name:     "aiResponse",
+                Type:     schema.FieldTypeText,
+                Required: true,
+            },
+        ),
+    }
+
+    return app.Dao().SaveCollection(conversations)
+}
+
 func main() {
 	app := pocketbase.New()
 
@@ -42,6 +87,10 @@ func main() {
     anthropicClient := anthropic.NewClient()
 
 	app.OnBeforeServe().Add(func(e *core.ServeEvent) error {
+	    // Make sure conversations collection exists
+	    if err := ensureConversationsCollection(app); err != nil {
+                return err
+        }
 		// Add the authentication middleware
 		e.Router.Use(func(next echo.HandlerFunc) echo.HandlerFunc {
 			return func(c echo.Context) error {
