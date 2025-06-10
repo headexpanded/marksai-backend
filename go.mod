@@ -1,4 +1,4 @@
-module yace-backend
+module marksai-backend
 
 go 1.23.0
 
